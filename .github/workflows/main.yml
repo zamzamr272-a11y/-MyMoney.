@@ -24,7 +24,14 @@ jobs:
 
       - name: Locate project folder
         run: |
-          PUB=$(find . -maxdepth 4 -type f -path '*/my_money_flutter_source/pubspec.yaml' -not -path './.git/*' | head -n 1)
+          ZIP=$(find . -maxdepth 2 -type f -iname 'MyMoney*.zip' -not -path './.git/*' | head -n 1)
+          SEARCH=.
+          if [ -n "$ZIP" ]; then
+            echo "Memakai kode dari zip: $ZIP"
+            rm -rf _src && mkdir _src && unzip -q "$ZIP" -d _src
+            SEARCH=_src
+          fi
+          PUB=$(find "$SEARCH" -maxdepth 4 -type f -path '*/my_money_flutter_source/pubspec.yaml' -not -path './.git/*' | head -n 1)
           if [ -z "$PUB" ]; then
             echo "MISSING: my_money_flutter_source/pubspec.yaml"
             echo "--- isi repository ---"
