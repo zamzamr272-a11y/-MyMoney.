@@ -1,0 +1,124 @@
+name: Build My Money APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: my-money-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Locate project folder
+        run: |
+          PUB=$(find . -maxdepth 4 -type f -path '*/my_money_flutter_source/pubspec.yaml' -not -path './.git/*' | head -n 1)
+          if [ -z "$PUB" ]; then
+            echo "MISSING: my_money_flutter_source/pubspec.yaml"
+            echo "--- isi repository ---"
+            find . -maxdepth 3 -not -path './.git/*' | sort | head -80
+            exit 1
+          fi
+          APP_DIR=$(dirname "$PUB")
+          ROOT_DIR=$(dirname "$APP_DIR")
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "ROOT_DIR=$ROOT_DIR" >> "$GITHUB_ENV"
+          echo "Proyek ditemukan di: $APP_DIR"
+
+      - name: Verify project files
+        run: |
+          missing=0
+          for f in \
+            "$APP_DIR/lib/main.dart" \
+            "$APP_DIR/lib/app.dart" \
+            "$APP_DIR/test/transaction_record_test.dart" \
+            "$ROOT_DIR/tool/prepare_android.py" \
+            "$ROOT_DIR/android-assets/res/drawable/ic_launcher_foreground.xml"; do
+            if [ ! -f "$f" ]; then echo "MISSING: $f"; missing=1; fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "--- isi repository ---"
+            find . -maxdepth 3 -not -path './.git/*' | sort | head -80
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform when missing
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          if [ ! -d android ]; then
+            flutter create --platforms=android --project-name my_money --org id.mymoney .
+          fi
+          rm -f test/widget_test.dart
+
+      - name: Configure Android and app icon
+        working-directory: ${{ env.ROOT_DIR }}
+        run: python3 tool/prepare_android.py my_money_flutter_source
+
+      - name: Install Flutter dependencies
+        working-directory: ${{ env.APP_DIR }}
+        run: flutter pub get
+
+      - name: Analyze Dart source
+        working-directory: ${{ env.APP_DIR }}
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Run Flutter tests
+        working-directory: ${{ env.APP_DIR }}
+        run: flutter test
+
+      - name: Build release APK
+        working-directory: ${{ env.APP_DIR }}
+        run: flutter build apk --release
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyMoney-release-APK
+          path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  publish_github_release:
+    name: Publish APK to GitHub Releases
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MyMoney-release-APK
+          path: release-assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: My Money ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/app-release.apk
+          fail_on_unmatched_files: true
